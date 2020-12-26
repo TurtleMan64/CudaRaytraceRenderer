@@ -1,0 +1,109 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CudaCompile Include="src\kernel.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\intellifix.h" />
+    <ClInclude Include="src\collision\collisionchecker.h">
+      <Filter>collision</Filter>
+    </ClInclude>
+    <ClInclude Include="src\collision\collisionmodel.h">
+      <Filter>collision</Filter>
+    </ClInclude>
+    <ClInclude Include="src\collision\collisionresult.h">
+      <Filter>collision</Filter>
+    </ClInclude>
+    <ClInclude Include="src\collision\material.h">
+      <Filter>collision</Filter>
+    </ClInclude>
+    <ClInclude Include="src\collision\objloader.h">
+      <Filter>collision</Filter>
+    </ClInclude>
+    <ClInclude Include="src\collision\triangle3d.h">
+      <Filter>collision</Filter>
+    </ClInclude>
+    <ClInclude Include="src\toolbox\getline.h">
+      <Filter>toolbox</Filter>
+    </ClInclude>
+    <ClInclude Include="src\toolbox\hex.h">
+      <Filter>toolbox</Filter>
+    </ClInclude>
+    <ClInclude Include="src\toolbox\input.h">
+      <Filter>toolbox</Filter>
+    </ClInclude>
+    <ClInclude Include="src\toolbox\level.h">
+      <Filter>toolbox</Filter>
+    </ClInclude>
+    <ClInclude Include="src\toolbox\maths.h">
+      <Filter>toolbox</Filter>
+    </ClInclude>
+    <ClInclude Include="src\toolbox\pixel.h">
+      <Filter>toolbox</Filter>
+    </ClInclude>
+    <ClInclude Include="src\toolbox\readbytes.h">
+      <Filter>toolbox</Filter>
+    </ClInclude>
+    <ClInclude Include="src\toolbox\split.h">
+      <Filter>toolbox</Filter>
+    </ClInclude>
+    <ClInclude Include="src\toolbox\vector.h">
+      <Filter>toolbox</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="collision">
+      <UniqueIdentifier>{042fb0d9-3648-409a-86d4-cff657bad2b6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="toolbox">
+      <UniqueIdentifier>{c70542b7-c254-4860-95b8-ef62def590e5}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\collision\CollisionChecker.cpp">
+      <Filter>collision</Filter>
+    </ClCompile>
+    <ClCompile Include="src\collision\CollisionModel.cpp">
+      <Filter>collision</Filter>
+    </ClCompile>
+    <ClCompile Include="src\collision\CollisionResult.cpp">
+      <Filter>collision</Filter>
+    </ClCompile>
+    <ClCompile Include="src\collision\Material.cpp">
+      <Filter>collision</Filter>
+    </ClCompile>
+    <ClCompile Include="src\collision\OBJLoader.cpp">
+      <Filter>collision</Filter>
+    </ClCompile>
+    <ClCompile Include="src\collision\Triangle3D.cpp">
+      <Filter>collision</Filter>
+    </ClCompile>
+    <ClCompile Include="src\toolbox\Getline.cpp">
+      <Filter>toolbox</Filter>
+    </ClCompile>
+    <ClCompile Include="src\toolbox\Hex.cpp">
+      <Filter>toolbox</Filter>
+    </ClCompile>
+    <ClCompile Include="src\toolbox\Input.cpp">
+      <Filter>toolbox</Filter>
+    </ClCompile>
+    <ClCompile Include="src\toolbox\Level.cpp">
+      <Filter>toolbox</Filter>
+    </ClCompile>
+    <ClCompile Include="src\toolbox\Maths.cpp">
+      <Filter>toolbox</Filter>
+    </ClCompile>
+    <ClCompile Include="src\toolbox\Pixel.cpp">
+      <Filter>toolbox</Filter>
+    </ClCompile>
+    <ClCompile Include="src\toolbox\ReadBytes.cpp">
+      <Filter>toolbox</Filter>
+    </ClCompile>
+    <ClCompile Include="src\toolbox\Split.cpp">
+      <Filter>toolbox</Filter>
+    </ClCompile>
+    <ClCompile Include="src\toolbox\Vector.cpp">
+      <Filter>toolbox</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>
