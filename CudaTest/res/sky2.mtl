@@ -26,4 +26,27 @@ illum 2
 map_Kd Rock.png
 map_norm Flat.png
 
+newmtl Sky
+Ns 0.000000
+Ka 0.000000 0.000000 0.000000
+Kd 0.800000 0.800000 0.800000
+Ks 0.800000 0.800000 0.800000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd CloudSea.png
+map_norm Flat.png
 
+newmtl Water
+Ns 0.000000
+Ka 0.000000 0.000000 0.000000
+Kd 0.800000 0.800000 0.800000
+Ks 0.800000 0.800000 0.800000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+type mirror
+map_Kd WaterNormal.png
+map_norm WaterNormal.png

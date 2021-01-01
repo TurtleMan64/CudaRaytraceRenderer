@@ -1,6 +1,7 @@
 #include <SDL2/SDL.h> 
 #include <SDL2/SDL_image.h>
 
+#include "texture_types.h"
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
@@ -19,6 +20,7 @@
 #include "toolbox/maths.h"
 #include "collision/collisionmodel.h"
 #include "collision/objloader.h"
+#include "collision/material.h"
 
 #define BLOCKS 60
 #define THREADS_PER_BLOCK (640)
@@ -31,10 +33,21 @@ int* displayBufferGPU = nullptr;
 #define displayHeight 900
 
 //temporary hard coded texture
-SDL_Surface* textureImg = nullptr;
-int* textureBufferGPU = nullptr;
-#define textureWidth 600
-#define textureHeight 600
+//SDL_Surface* textureImg = nullptr;
+//int* textureBufferGPU = nullptr;
+//#define textureWidth 512
+//#define textureHeight 512
+
+//Texture reference for 2D int texture
+#define NUM_TEXTURES 4
+texture<int, 2, cudaReadModeElementType> texture1DiffuseGPU;
+texture<int, 2, cudaReadModeElementType> texture1NormalGPU;
+texture<int, 2, cudaReadModeElementType> texture2DiffuseGPU;
+texture<int, 2, cudaReadModeElementType> texture2NormalGPU;
+texture<int, 2, cudaReadModeElementType> texture3DiffuseGPU;
+texture<int, 2, cudaReadModeElementType> texture3NormalGPU;
+texture<int, 2, cudaReadModeElementType> texture4DiffuseGPU;
+texture<int, 2, cudaReadModeElementType> texture4NormalGPU;
 
 //cam stuff
 Vector3d camPosition;
@@ -47,11 +60,24 @@ float* camValuesGPU = nullptr; //position, yaw, pitch
 #define nearPlane 0.15f
 
 //list of triangles data struct
-__constant__ char trianglesGPU[32000];
+__constant__ char trianglesGPU[32000]; //can do ~300 triangles
 
 cudaError_t setupGlobalVars();
 
 cudaError_t render();
+
+__device__ inline float vec3dot(const float a[], const float b[])
+{
+    return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+}
+
+__device__ inline void vec3bounce(float A[], float normal[])
+{
+    float scale = -2.0f*vec3dot(A, normal);
+    A[0] += normal[0]*scale;
+    A[1] += normal[1]*scale;
+    A[2] += normal[2]*scale;
+}
 
 __device__ inline void vec3normalize(float vec3[])
 {
@@ -64,11 +90,6 @@ __device__ inline void vec3normalize(float vec3[])
 __device__ inline float vec3len(const float a[])
 {
     return sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
-}
-
-__device__ inline float vec3dot(const float a[], const float b[])
-{
-    return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
 }
 
 __device__ inline void vec3cross(float out[], const float a[], const float b[])
@@ -131,8 +152,8 @@ __device__ void interpolateUvTriangle(float out[],
     float a2 = (vec3len(va2)/a) * copysignGPU(vec3dot(va, va2));
     float a3 = (vec3len(va3)/a) * copysignGPU(vec3dot(va, va3));
 
-    out[0] =   uv1x*a1 + uv2x*a2 + uv3x*a3;
-    out[1] = -(uv1y*a1 + uv2y*a2 + uv3y*a3);
+    out[0] = -(uv1x*a1 + uv2x*a2 + uv3x*a3);
+    out[1] = uv1y*a1 + uv2y*a2 + uv3y*a3;
 }
 
 __device__ bool checkPointInTriangle2DGPU(
@@ -156,9 +177,35 @@ __device__ void calcWorldSpaceDirectionVectorFromScreenSpaceCoordsGPU(float out[
 
 __device__ float inline toRadiansGPU(const float deg);
 
-__device__ int sampleTriangleColorGPU(const float cx, const float cy, const float cz, const int triIdx, const int* inTexture)
+__device__ int sampleTexture(const float u, const float v, const int textureId, const int type)
 {
-    int base = triIdx*93;
+    switch (type)
+    {
+    case 0:
+        switch (textureId)
+        {
+            case  0: return tex2D(texture1DiffuseGPU, u, v);
+            case  1: return tex2D(texture2DiffuseGPU, u, v);
+            case  2: return tex2D(texture3DiffuseGPU, u, v);
+            case  3: return tex2D(texture4DiffuseGPU, u, v);
+            default: return tex2D(texture1DiffuseGPU, u, v);
+        }
+
+    default:
+        switch (textureId)
+        {
+            case  0: return tex2D(texture1NormalGPU, u, v);
+            case  1: return tex2D(texture2NormalGPU, u, v);
+            case  2: return tex2D(texture3NormalGPU, u, v);
+            case  3: return tex2D(texture4NormalGPU, u, v);
+            default: return tex2D(texture1NormalGPU, u, v);
+        }
+    }
+}
+
+__device__ void sampleTriangleUvGPU(const float cx, const float cy, const float cz, const int triIdx, float* u, float* v)
+{
+    int base = triIdx*96;
     float t1x, t1y, t1z, t2x, t2y, t2z, t3x, t3y, t3z, uv1x, uv1y, uv2x, uv2y, uv3x, uv3y;
     memcpy(&t1x, &trianglesGPU[ 4+base], 4);
     memcpy(&t1y, &trianglesGPU[ 8+base], 4);
@@ -187,20 +234,76 @@ __device__ int sampleTriangleColorGPU(const float cx, const float cy, const floa
         uv3x, uv3y,
         cx, cy, cz);
 
-    int x = (int)(textureWidth*uv[0]);
-    int y = (int)(textureHeight*uv[1]);
-    x = x % textureWidth;
-    y = y % textureHeight;
-    while (x < 0)
-    {
-        x = x + textureWidth;
-    }
+    *u = uv[0];
+    *v = uv[1];
+    //int textureId = 0;
+    //memcpy(&textureId, &trianglesGPU[68+base], 4); //texture id
+    //switch (textureId)
+    //{
+    //    case  0: return tex2D(texture1DiffuseGPU, uv[0], uv[1]);
+    //    case  1: return tex2D(texture2DiffuseGPU, uv[0], uv[1]);
+    //    case  2: return tex2D(texture3DiffuseGPU, uv[0], uv[1]);
+    //    default: return tex2D(texture1DiffuseGPU, uv[0], uv[1]);
+    //}
+    //int x = (int)(textureWidth*uv[0]);
+    //int y = (int)(textureHeight*uv[1]);
+    //x = x % textureWidth;
+    //y = y % textureHeight;
+    //while (x < 0)
+    //{
+    //    x = x + textureWidth;
+    //}
+    //
+    //while (y < 0)
+    //{
+    //    y = y + textureHeight;
+    //}
+    //return inTexture[y*textureWidth + x];
+}
 
-    while (y < 0)
-    {
-        y = y + textureHeight;
-    }
-    return inTexture[y*textureWidth + x];
+__device__ void calculateTangentSpaceOfUv(const int triIdx, float* outTangent, float* outBitangent)
+{
+    int base = triIdx*96;
+    float p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z, uv1x, uv1y, uv2x, uv2y, uv3x, uv3y;
+    memcpy(&p1x, &trianglesGPU[ 4+base], 4);
+    memcpy(&p1y, &trianglesGPU[ 8+base], 4);
+    memcpy(&p1z, &trianglesGPU[12+base], 4);
+    memcpy(&p2x, &trianglesGPU[16+base], 4);
+    memcpy(&p2y, &trianglesGPU[20+base], 4);
+    memcpy(&p2z, &trianglesGPU[24+base], 4);
+    memcpy(&p3x, &trianglesGPU[28+base], 4);
+    memcpy(&p3y, &trianglesGPU[32+base], 4);
+    memcpy(&p3z, &trianglesGPU[36+base], 4);
+
+    memcpy(&uv1x, &trianglesGPU[72+base], 4); //uv
+    memcpy(&uv1y, &trianglesGPU[76+base], 4);
+    memcpy(&uv2x, &trianglesGPU[80+base], 4);
+    memcpy(&uv2y, &trianglesGPU[84+base], 4);
+    memcpy(&uv3x, &trianglesGPU[88+base], 4);
+    memcpy(&uv3y, &trianglesGPU[92+base], 4);
+
+    float dv1[] = {p2x-p1x, p2y-p1y, p2z-p1z};
+    float dv2[] = {p3x-p1x, p3y-p1y, p3z-p1z};
+
+    float duv1[] = {uv2x-uv1x, uv2y-uv1y};
+    float duv2[] = {uv3x-uv1x, uv3y-uv1y};
+
+    float r = 1.0f / (duv1[0]*duv2[1] - duv1[1]*duv2[0]);
+
+    float tangent[]   = { (dv1[0]*duv2[1] - dv2[0]*duv1[1])*r, (dv1[1]*duv2[1] - dv2[1]*duv1[1])*r, (dv1[2]*duv2[1] - dv2[2]*duv1[1])*r };
+    outTangent[0] = tangent[0];
+    outTangent[1] = tangent[1];
+    outTangent[2] = tangent[2];
+
+    float bitangent[] = { (dv2[0]*duv1[0] - dv1[0]*duv2[0])*r, (dv2[1]*duv1[0] - dv1[1]*duv2[0])*r, (dv2[2]*duv1[0] - dv1[2]*duv2[0])*r };
+    outBitangent[0] = bitangent[0];
+    outBitangent[1] = bitangent[1];
+    outBitangent[2] = bitangent[2];
+}
+
+__device__ void rotateToTangentGPU(float textureNormal[], float tangent[])
+{
+    
 }
 
 __device__ bool checkCollisionGPU(char* result,
@@ -215,9 +318,14 @@ __device__ bool checkCollisionGPU(char* result,
     int triangleId = -1;
     float cPos[] = {0,0,0};
 
-    for (int i = 0; i < numTriangles; i++)
+    //int i = blockIdx.x;
+    int i = 0;
+    for (int count = 0; count < numTriangles; count++)
     {
-        int base = i*93;
+        i = (i+1) % numTriangles;
+        //i++;
+
+        int base = i*96;
 
         //float A = *((float*)&trianglesGPU[40+base]); //this does not work
         //float B = *((float*)&trianglesGPU[44+base]);
@@ -301,7 +409,7 @@ __device__ bool checkCollisionGPU(char* result,
     return false;
 }
 
-__device__ int doPixelGPU(const float* camValues, const int screenX, const int screenY, const int* inTexture)
+__device__ int doPixelGPU(const float* camValues, const int screenX, const int screenY)
 {
     float worldCastDirection[] = {0, 0, 0};
     calcWorldSpaceDirectionVectorFromScreenSpaceCoordsGPU(worldCastDirection, (float)screenX, (float)screenY, camValues[3], camValues[4]);
@@ -309,32 +417,134 @@ __device__ int doPixelGPU(const float* camValues, const int screenX, const int s
     worldCastDirection[1] *= 1000;
     worldCastDirection[2] *= 1000;
 
-    float gazePosition[] = {camValues[0], camValues[1], camValues[2]};
+    float startPosition[] = {camValues[0], camValues[1], camValues[2]};
+    float gazePosition[]  = {camValues[0], camValues[1], camValues[2]};
     gazePosition[0] += worldCastDirection[0];
     gazePosition[1] += worldCastDirection[1];
     gazePosition[2] += worldCastDirection[2];
 
     char result[] = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0};
-    if (checkCollisionGPU(result, camValues[0], camValues[1], camValues[2], gazePosition[0], gazePosition[1], gazePosition[2]))
+
+    //if (screenX == 1600/2 && screenY == 900/2)
     {
-        int triIdx;
-        float colX, colY, colZ;
-
-        memcpy(&triIdx, &result[ 0], 4);
-        memcpy(&colX,   &result[ 4], 4);
-        memcpy(&colY,   &result[ 8], 4);
-        memcpy(&colZ,   &result[12], 4);
-
-        return sampleTriangleColorGPU(colX, colY, colZ, triIdx, inTexture);
+        //printf("\n");
     }
-    else //no collision
+    int tries = 6;
+    while (tries > 0)
     {
-        return pixelFromRgbGPU(0, 0, 0);
+        tries--;
+        //if (screenX == 1600/2 && screenY == 900/2)
+        {
+            //printf("v %f %f %f\nv %f %f %f\n", startPosition[0], startPosition[1], startPosition[2], gazePosition[0], gazePosition[1], gazePosition[2]);
+        }
+        if (checkCollisionGPU(result, startPosition[0], startPosition[1], startPosition[2], gazePosition[0], gazePosition[1], gazePosition[2]))
+        {
+            int triIdx;
+            float colX, colY, colZ;
+
+            memcpy(&triIdx, &result[ 0], 4);
+            memcpy(&colX,   &result[ 4], 4);
+            memcpy(&colY,   &result[ 8], 4);
+            memcpy(&colZ,   &result[12], 4);
+
+            float u, v;
+            sampleTriangleUvGPU(colX, colY, colZ, triIdx, &u, &v);
+
+            int base = triIdx*96;
+
+            char type = trianglesGPU[base + 96];
+
+            int textureId = 0;
+            memcpy(&textureId, &trianglesGPU[base + 68], 4);
+
+            if (type == 0) //normal type
+            {
+                return sampleTexture(u, v, textureId, 0);
+            }
+            else //mirror type
+            {
+                int surfNormal = sampleTexture(u, v, textureId, 1);
+                //float tangentNormal[] = 
+                //{
+                //    (((surfNormal & 0x00FF0000) >> 16) - 128)/256.0f,
+                //    (((surfNormal & 0x000000FF) >>  0) -   0)/256.0f,
+                //    (((surfNormal & 0x0000FF00) >>  8) - 128)/256.0f
+                //};
+                float tangentNormal[] = 
+                {
+                    (((surfNormal & 0x00FF0000) >> 16) - 128)/256.0f,
+                    (((surfNormal & 0x0000FF00) >>  8) - 128)/256.0f,
+                    (((surfNormal & 0x000000FF) >>  0) - 128)/256.0f
+                };
+                vec3normalize(tangentNormal);
+
+                float tangent[] = {0,0,0};
+                float bitangent[] = {0,0,0};
+                calculateTangentSpaceOfUv(triIdx, tangent, bitangent);
+                if (screenX == 1600/2 && screenY == 900/2)
+                {
+                    //printf("%f %f %f       ", tangent[0], tangent[1], tangent[2]);
+                    //printf("%f %f %f\n", bitangent[0], bitangent[1], bitangent[2]);
+                }
+
+                float normal[] = {0,0,0};
+                memcpy(&normal[0], &trianglesGPU[56+base], 4); //normal
+                memcpy(&normal[1], &trianglesGPU[60+base], 4);
+                memcpy(&normal[2], &trianglesGPU[64+base], 4);
+
+                float newNormLen = (vec3len(tangent) + vec3len(bitangent))/2;
+                normal[0]*=newNormLen;
+                normal[1]*=newNormLen;
+                normal[2]*=newNormLen;
+
+                float normalWorldSpace[] = {0,0,0};
+                normalWorldSpace[0] = tangent[0]*tangentNormal[0] + bitangent[0]*tangentNormal[1] + normal[0]*tangentNormal[2];
+                normalWorldSpace[1] = tangent[1]*tangentNormal[0] + bitangent[1]*tangentNormal[1] + normal[1]*tangentNormal[2];
+                normalWorldSpace[2] = tangent[2]*tangentNormal[0] + bitangent[2]*tangentNormal[1] + normal[2]*tangentNormal[2];
+
+                //if (screenX == 1600/2 && screenY == 900/2)
+                {
+                    //printf("    normalworldspace = %f %f %f\n\n", normalWorldSpace[0], normalWorldSpace[1], normalWorldSpace[2]);
+                }
+
+                //normalWorldSpace[0] = (normalWorldSpace[0]+1)/2.0f;
+                //normalWorldSpace[1] = (normalWorldSpace[1]+1)/2.0f;
+                //normalWorldSpace[2] = (normalWorldSpace[2]+1)/2.0f;
+
+                //if (screenX == 1600/2 && screenY == 900/2)
+                //{
+                //    printf("%f %f %f\n", tangentUv[0], tangentUv[1], tangentUv[2]);
+                //}
+                //
+                //return pixelFromRgbGPU(normalWorldSpace[0], normalWorldSpace[1], normalWorldSpace[2]);
+
+                float newDirection[] = {gazePosition[0] - startPosition[0], gazePosition[1] - startPosition[1], gazePosition[2] - startPosition[2]};
+                vec3normalize(newDirection);
+                vec3normalize(normalWorldSpace);
+                vec3bounce(newDirection, normalWorldSpace);
+                
+                startPosition[0] = colX + 0.001f*newDirection[0];
+                startPosition[1] = colY + 0.001f*newDirection[1];
+                startPosition[2] = colZ + 0.001f*newDirection[2];
+                
+                gazePosition[0] = colX + 1000*newDirection[0];
+                gazePosition[1] = colY + 1000*newDirection[1];
+                gazePosition[2] = colZ + 1000*newDirection[2];
+            }
+
+            //return sampleTriangleColorGPU(colX, colY, colZ, triIdx);
+        }
+        else //no collision
+        {
+            return pixelFromRgbGPU(0, 0, 0);
+        }
     }
     //if (res == 0)
     {
         //return pixelFromRgbGPU(0, 0, 0);
     }
+
+    return pixelFromRgbGPU(0, 0, 0);
 
     //return pixelFromRgbGPU(1, 1, 1);
     //double x = ((double)screenX)/displayWidth;
@@ -354,14 +564,14 @@ __device__ int doPixelGPU(const float* camValues, const int screenX, const int s
     //return texIdx;
 }
 
-__global__ void renderPixelsGPU(int* outDisplay, const int* inTexture, const float* camValues)
+__global__ void renderPixelsGPU(int* outDisplay, const float* camValues)
 {
     //int i = threadIdx.x;
     //c[i] = a[i] + b[i];
     //printf("%d, %d\n", blockIdx.x, threadIdx.x);
     int idx = blockIdx.x*THREADS_PER_BLOCK + threadIdx.x;
 
-    if (idx == 0)
+    //if (idx == 0)
     {
         //printf("camPos   = %f %f %f\n", camValues[0], camValues[1], camValues[2]);
         //printf("camYaw   = %f\n", camValues[3]);
@@ -379,7 +589,7 @@ __global__ void renderPixelsGPU(int* outDisplay, const int* inTexture, const flo
         int screenX = pixelIdx % displayWidth;
         int screenY = pixelIdx / displayWidth;
 
-        int color = doPixelGPU(camValues, screenX, screenY, inTexture);
+        int color = doPixelGPU(camValues, screenX, screenY);
         //if (textureIdx < 0 || textureIdx >= textureWidth*textureHeight)
         {
             //textureIdx = 0;
@@ -435,16 +645,16 @@ int main(int argc, char* argv[])
 
     windowSurface = SDL_GetWindowSurface(window);
 
-    textureImg = IMG_Load("res/img.png");
-    if (textureImg == nullptr)
+    //textureImg = IMG_Load("res/img.png");
+    //if (textureImg == nullptr)
     {
-        std::fprintf(stdout, "Error: Cannot load texture '%s'\n", "res/img.png");
+        //std::fprintf(stdout, "Error: Cannot load texture '%s'\n", "res/img.png");
     }
 
     cudaError_t cudaStatus = setupGlobalVars();
     if (cudaStatus != cudaSuccess)
     {
-        fprintf(stderr, "addWithCuda failed!");
+        fprintf(stderr, "renderPixelsGPU failed!");
         Sleep(1000);
         return 1;
     }
@@ -456,7 +666,7 @@ int main(int argc, char* argv[])
         cudaStatus = render();
         if (cudaStatus != cudaSuccess)
         {
-            fprintf(stderr, "addWithCuda failed!");
+            fprintf(stderr, "renderPixelsGPU failed!");
             Sleep(1000);
             return 1;
         }
@@ -499,7 +709,7 @@ int main(int argc, char* argv[])
 
         float c = cos(Maths::toRadians(camYaw));
         float s = sin(Maths::toRadians(camYaw));
-        float speed = 20.0;
+        float speed = 30.0;
 
 		if (keyboardState[SDL_SCANCODE_W])
 		{
@@ -567,6 +777,134 @@ int main(int argc, char* argv[])
     return 0;
 }
 
+int pixelFromRgb(const float r1, const float g1, const float b1)
+{
+    Uint32 r = (int)(255*r1);
+    Uint32 g = (int)(255*g1);
+    Uint32 b = (int)(255*b1);
+    r = r << 16;
+    g = g << 8;
+
+    return 0xFF000000 | r | g | b;
+}
+
+cudaError_t setupTextures(CollisionModel* model)
+{
+    cudaError_t cudaStatus;
+
+    for (int i = 0; i < NUM_TEXTURES; i++)
+    {
+        for (int map = 0; map < 2; map++)
+        {
+            SDL_Surface* s = model->materials[i]->textureDiffuse;
+            if (map == 1)
+            {
+                s = model->materials[i]->textureNormal;
+            }
+            int m1 = s->h; // height
+            int n1 = s->w; // width  = #columns
+            size_t pitch1, tex_ofs1;
+            int* arr1 = new int[n1*m1];
+            model->serializeTextureToGPU(i, map, arr1);
+            int* arr_d1 = nullptr;
+            cudaStatus = cudaMallocPitch((void**)&arr_d1, &pitch1, n1*sizeof(*arr_d1), m1);
+            if (cudaStatus != cudaSuccess) { fprintf(stderr, "cudaMallocPitch failed!"); return cudaStatus; }
+            cudaStatus = cudaMemcpy2D(arr_d1, pitch1, arr1, n1*sizeof(int), n1*sizeof(int), m1, cudaMemcpyHostToDevice);
+            if (cudaStatus != cudaSuccess) { fprintf(stderr, "cudaMemcpy2D failed!"); return cudaStatus; }
+            switch (i)
+            {
+            case 0:
+                switch (map)
+                {
+                case 0:
+                    texture1DiffuseGPU.addressMode[0] = cudaAddressModeWrap;
+                    texture1DiffuseGPU.addressMode[1] = cudaAddressModeWrap;
+                    texture1DiffuseGPU.filterMode = cudaFilterModePoint; //can only do linear with float type
+                    texture1DiffuseGPU.normalized = true;
+                    cudaStatus = cudaBindTexture2D(&tex_ofs1, &texture1DiffuseGPU, arr_d1, &texture1DiffuseGPU.channelDesc, n1, m1, pitch1);
+                    break;
+                default:
+                    texture1NormalGPU.addressMode[0] = cudaAddressModeWrap;
+                    texture1NormalGPU.addressMode[1] = cudaAddressModeWrap;
+                    texture1NormalGPU.filterMode = cudaFilterModePoint; //can only do linear with float type
+                    texture1NormalGPU.normalized = true;
+                    cudaStatus = cudaBindTexture2D(&tex_ofs1, &texture1NormalGPU, arr_d1, &texture1NormalGPU.channelDesc, n1, m1, pitch1);
+                    break;
+                }
+                break;
+
+            case 1:
+                switch (map)
+                {
+                case 0:
+                    texture2DiffuseGPU.addressMode[0] = cudaAddressModeWrap;
+                    texture2DiffuseGPU.addressMode[1] = cudaAddressModeWrap;
+                    texture2DiffuseGPU.filterMode = cudaFilterModePoint; //can only do linear with float type
+                    texture2DiffuseGPU.normalized = true;
+                    cudaStatus = cudaBindTexture2D(&tex_ofs1, &texture2DiffuseGPU, arr_d1, &texture2DiffuseGPU.channelDesc, n1, m1, pitch1);
+                    break;
+                default:
+                    texture2NormalGPU.addressMode[0] = cudaAddressModeWrap;
+                    texture2NormalGPU.addressMode[1] = cudaAddressModeWrap;
+                    texture2NormalGPU.filterMode = cudaFilterModePoint; //can only do linear with float type
+                    texture2NormalGPU.normalized = true;
+                    cudaStatus = cudaBindTexture2D(&tex_ofs1, &texture2NormalGPU, arr_d1, &texture2NormalGPU.channelDesc, n1, m1, pitch1);
+                    break;
+                }
+                break;
+
+            case 2:
+                switch (map)
+                {
+                case 0:
+                    texture3DiffuseGPU.addressMode[0] = cudaAddressModeWrap;
+                    texture3DiffuseGPU.addressMode[1] = cudaAddressModeWrap;
+                    texture3DiffuseGPU.filterMode = cudaFilterModePoint; //can only do linear with float type
+                    texture3DiffuseGPU.normalized = true;
+                    cudaStatus = cudaBindTexture2D(&tex_ofs1, &texture3DiffuseGPU, arr_d1, &texture3DiffuseGPU.channelDesc, n1, m1, pitch1);
+                    break;
+                default:
+                    texture3NormalGPU.addressMode[0] = cudaAddressModeWrap;
+                    texture3NormalGPU.addressMode[1] = cudaAddressModeWrap;
+                    texture3NormalGPU.filterMode = cudaFilterModePoint; //can only do linear with float type
+                    texture3NormalGPU.normalized = true;
+                    cudaStatus = cudaBindTexture2D(&tex_ofs1, &texture3NormalGPU, arr_d1, &texture3NormalGPU.channelDesc, n1, m1, pitch1);
+                    break;
+                }
+                break;
+
+            case 3:
+                switch (map)
+                {
+                case 0:
+                    texture4DiffuseGPU.addressMode[0] = cudaAddressModeWrap;
+                    texture4DiffuseGPU.addressMode[1] = cudaAddressModeWrap;
+                    texture4DiffuseGPU.filterMode = cudaFilterModePoint; //can only do linear with float type
+                    texture4DiffuseGPU.normalized = true;
+                    cudaStatus = cudaBindTexture2D(&tex_ofs1, &texture4DiffuseGPU, arr_d1, &texture4DiffuseGPU.channelDesc, n1, m1, pitch1);
+                    break;
+                default:
+                    texture4NormalGPU.addressMode[0] = cudaAddressModeWrap;
+                    texture4NormalGPU.addressMode[1] = cudaAddressModeWrap;
+                    texture4NormalGPU.filterMode = cudaFilterModePoint; //can only do linear with float type
+                    texture4NormalGPU.normalized = true;
+                    cudaStatus = cudaBindTexture2D(&tex_ofs1, &texture4NormalGPU, arr_d1, &texture4NormalGPU.channelDesc, n1, m1, pitch1);
+                    break;
+                }
+                break;
+
+            default:
+                break;
+
+            }
+            if (cudaStatus != cudaSuccess) { fprintf(stderr, "cudaBindTexture2D failed!"); return cudaStatus;}
+            if (tex_ofs1 !=0) { printf ("tex_ofs = %zu\n", tex_ofs1); return cudaStatus;}
+        }
+    }
+
+    return cudaStatus;
+}
+
 cudaError_t setupGlobalVars()
 {
     cudaError_t cudaStatus;
@@ -587,12 +925,14 @@ cudaError_t setupGlobalVars()
         return cudaStatus;
     }
 
-    cudaStatus = cudaMalloc((void**)&textureBufferGPU, textureWidth * textureHeight * sizeof(int));
-    if (cudaStatus != cudaSuccess)
-    {
-        fprintf(stderr, "cudaMalloc failed!");
-        return cudaStatus;
-    }
+    //cudaStatus = cudaMalloc((void**)&textureBufferGPU, textureWidth * textureHeight * sizeof(int));
+    //if (cudaStatus != cudaSuccess)
+    //{
+    //    fprintf(stderr, "cudaMalloc failed!");
+    //    return cudaStatus;
+    //}
+    //texturesGPU
+    //setupTextures();
 
     cudaStatus = cudaMalloc((void**)&camValuesGPU, 5 * sizeof(float));
     if (cudaStatus != cudaSuccess)
@@ -601,8 +941,9 @@ cudaError_t setupGlobalVars()
         return cudaStatus;
     }
 
-    CollisionModel* model = loadCollisionModel("res/", "sky.obj");
-    std::vector<char> buf = model->serializeToGPU();
+    CollisionModel* model = loadCollisionModel("res/", "sky2.obj");
+    std::vector<char> buf = model->serializeTrianglesToGPU();
+    setupTextures(model);
     //trianglesGPU = new char[(int)buf.size()];
     //cudaStatus = cudaMalloc((void**)&trianglesGPU, (int)buf.size() * sizeof(char));
     //if (cudaStatus != cudaSuccess)
@@ -612,12 +953,12 @@ cudaError_t setupGlobalVars()
     //}
 
     // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(textureBufferGPU, textureImg->pixels, (textureImg->w*textureImg->h) * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess)
-    {
-        fprintf(stderr, "cudaMemcpy failed!");
-        return cudaStatus;
-    }
+    //cudaStatus = cudaMemcpy(textureBufferGPU, textureImg->pixels, (textureImg->w*textureImg->h) * sizeof(int), cudaMemcpyHostToDevice);
+    //if (cudaStatus != cudaSuccess)
+    //{
+    //    fprintf(stderr, "cudaMemcpy failed!");
+    //    return cudaStatus;
+    //}
 
     //cudaStatus = cudaMemcpy(trianglesGPU, &buf[0], (int)buf.size() * sizeof(char), cudaMemcpyHostToDevice);
     //if (cudaStatus != cudaSuccess)
@@ -640,17 +981,22 @@ cudaError_t render()
     cudaError_t cudaStatus;
 
     float camValues[5] = {camPosition.x, camPosition.y, camPosition.z, camYaw, camPitch};
-    cudaMemcpy(camValuesGPU, camValues, 5 * sizeof(float), cudaMemcpyHostToDevice);
-
+    cudaStatus = cudaMemcpy(camValuesGPU, camValues, 5 * sizeof(float), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess)
+    {
+        fprintf(stderr, "cudaMemcpy cam values failed: %s\n", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+    
     // Launch a kernel on the GPU with one thread for each element.
     //addKernel<<<1, size>>>(dev_c, dev_a, dev_b);
-    renderPixelsGPU CUDA_KERNEL(BLOCKS, THREADS_PER_BLOCK)(displayBufferGPU, textureBufferGPU, camValuesGPU);
+    renderPixelsGPU CUDA_KERNEL(BLOCKS, THREADS_PER_BLOCK)(displayBufferGPU, camValuesGPU);
 
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess)
     {
-        fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        fprintf(stderr, "renderPixelsGPU launch failed: %s\n", cudaGetErrorString(cudaStatus));
         return cudaStatus;
     }
     //SDL_Delay(6);
@@ -667,7 +1013,7 @@ cudaError_t render()
     cudaStatus = cudaMemcpy(windowSurface->pixels, displayBufferGPU, displayWidth * displayHeight * sizeof(int), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess)
     {
-        fprintf(stderr, "cudaMemcpy failed!");
+        fprintf(stderr, "cudaMemcpy display to host failed: %s\n", cudaGetErrorString(cudaStatus));
         return cudaStatus;
     }
 
@@ -783,7 +1129,7 @@ __device__ bool checkPointInTriangle3DGPU(
 	const float checkx, const float checky, const float checkz,
 	const int triIdx)
 {
-    int base = triIdx*93;
+    int base = triIdx*96;
 
     float nX, nY, nZ;
     memcpy(&nX, &trianglesGPU[56+base], 4);

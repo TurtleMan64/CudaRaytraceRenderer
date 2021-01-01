@@ -15,11 +15,53 @@
 #include "triangle3d.h"
 #include "material.h"
 
+SDL_Surface* loadSdlImage(const char* filepath)
+{
+    SDL_Surface* tex = IMG_Load(filepath);
+    if (tex == nullptr)
+    {
+        std::fprintf(stdout, "Error: Cannot load texture '%s'\n", filepath);
+        return nullptr;
+    }
+
+    //flip the colors
+    for (int x = 0; x < tex->w; x++)
+    {
+        for (int y = 0; y < tex->h; y++)
+        {
+            char* pixelStart = (char*)tex->pixels;
+            char* myPixel = pixelStart + (y * tex->pitch) + (x * 4);
+            Uint32* pixAddr = (Uint32*)myPixel;
+
+            Uint32 pix = (*pixAddr);
+            //swap colors around
+            Uint32 r = pix & 0x00FF0000; //should be red
+            Uint32 g = pix & 0x0000FF00; //should be green
+            Uint32 b = pix & 0x000000FF; //should be blue
+
+            r = r >> 16;
+            g = g >> 8;
+
+            //swap red and blue
+            Uint32 ogR = r;
+            r = b;
+            b = ogR;
+
+            r = r << 16;
+            g = g << 8;
+            Uint32 pixSwapped = 0xFF000000 | r | g | b;
+            *pixAddr = pixSwapped;
+        }
+    }
+
+    return tex;
+}
+
 CollisionModel* loadCollisionModel(std::string filePath, std::string fileName)
 {
 	CollisionModel* collisionModel = new CollisionModel;
 
-	std::list<Material*> materials;
+	//std::vector<Material*> materials;
 
 	Material* currMaterial = nullptr;
 
@@ -95,7 +137,7 @@ CollisionModel* loadCollisionModel(std::string filePath, std::string fileName)
 			{
 				currMaterial = nullptr;
 
-				for (Material* mat : materials)
+				for (Material* mat : collisionModel->materials)
 				{
 					if (mat->name == lineSplit[1])
 					{
@@ -131,25 +173,35 @@ CollisionModel* loadCollisionModel(std::string filePath, std::string fileName)
 						if (strcmp(lineSplitMTL[0], "newmtl") == 0)
 						{
 							Material* newMaterial = new Material(lineSplitMTL[1]);
-							materials.push_back(newMaterial);
+							collisionModel->materials.push_back(newMaterial);
 						}
 						else if (strcmp(lineSplitMTL[0], "type")   == 0 ||
 								 strcmp(lineSplitMTL[0], "\ttype") == 0)
 						{
 							if (strcmp(lineSplitMTL[1], "mirror") == 0)
 							{
-								materials.back()->type = 1;
+								collisionModel->materials.back()->type = 1;
 							}
 						}
                         else if (strcmp(lineSplitMTL[0], "map_Kd")   == 0 ||
 								 strcmp(lineSplitMTL[0], "\tmap_Kd") == 0)
 						{
-							SDL_Surface* tex = IMG_Load((filePath + lineSplitMTL[1]).c_str());
+							SDL_Surface* tex = loadSdlImage((filePath + lineSplitMTL[1]).c_str());
                             if (tex == nullptr)
                             {
                                 std::fprintf(stdout, "Error: Cannot load texture '%s'\n", (filePath + lineSplitMTL[1]).c_str());
                             }
-							materials.back()->texture = tex;
+							collisionModel->materials.back()->textureDiffuse = tex;
+						}
+                        else if (strcmp(lineSplitMTL[0], "map_norm")   == 0 ||
+								 strcmp(lineSplitMTL[0], "\tmap_norm") == 0)
+						{
+							SDL_Surface* tex = loadSdlImage((filePath + lineSplitMTL[1]).c_str());
+                            if (tex == nullptr)
+                            {
+                                std::fprintf(stdout, "Error: Cannot load texture '%s'\n", (filePath + lineSplitMTL[1]).c_str());
+                            }
+							collisionModel->materials.back()->textureNormal = tex;
 						}
 					}
 					free(lineSplitMTL);

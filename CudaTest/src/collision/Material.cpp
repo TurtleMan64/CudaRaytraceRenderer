@@ -5,13 +5,15 @@
 Material::Material(std::string name)
 {
     this->name = name;
-    this->texture = nullptr;
+    this->textureDiffuse = nullptr;
+    this->textureNormal = nullptr;
     this->type = 0;
 }
 
-Material::Material(std::string name, SDL_Surface* texture, int type)
+Material::Material(std::string name, SDL_Surface* textureDiffuse, SDL_Surface* textureNormal, int type)
 {
     this->name = name;
-	this->texture = texture;
+	this->textureDiffuse = textureDiffuse;
+    this->textureNormal = textureNormal;
     this->type = type;
 }

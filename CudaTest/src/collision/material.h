@@ -11,13 +11,14 @@ class Material
 public:
     std::string name;
 
-	SDL_Surface* texture;
+	SDL_Surface* textureDiffuse;
+    SDL_Surface* textureNormal;
 
-    int type; //0 = diffuse. 1 = shiny
+    int type; //0 = diffuse. 1 = mirror
 
     Material(std::string name);
 
-	Material(std::string name, SDL_Surface* texture, int type);
+	Material(std::string name, SDL_Surface* textureDiffuse, SDL_Surface* textureNormal, int type);
 };
 
 #endif

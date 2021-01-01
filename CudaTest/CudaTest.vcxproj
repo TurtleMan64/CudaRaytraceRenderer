@@ -128,7 +128,6 @@
       <FastMath>true</FastMath>
       <Optimization>O2</Optimization>
       <TypeInfo>false</TypeInfo>
-      <GenerateLineInfo>true</GenerateLineInfo>
     </CudaCompile>
     <CudaLink>
       <Optimization>O2</Optimization>
